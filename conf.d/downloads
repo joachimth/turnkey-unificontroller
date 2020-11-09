@@ -1,0 +1,60 @@
+#!/bin/bash -ex
+
+[ "$FAB_HTTP_PROXY" ] && PROXY="--proxy $FAB_HTTP_PROXY"
+
+BASEDIR=/usr/lib/unifi
+DATADIR=/unifi/data
+LOGDIR=/unifi/log
+CERTDIR=/unifi/cert
+RUNDIR=/var/run/unifi
+ODATADIR=/var/lib/unifi
+OLOGDIR=/var/log/unifi
+CERTNAME=cert.pem
+CERT_PRIVATE_NAME=privkey.pem
+CERT_IS_CHAIN=false
+GOSU_VERSION=1.10
+BIND_PRIV=true
+RUNAS_UID0=true
+UNIFI_GID=999
+UNIFI_UID=999
+
+
+
+
+fetchDeps = 'ca-certificates dirmngr gpg wget'
+apt-get update
+apt-get install -y --no-install-recommends $fetchDeps
+
+dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"
+
+curl -L -f $PROXY  "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch" -o /usr/local/bin/gosu
+curl -L -f $PROXY "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch.asc" -o /usr/local/bin/gosu.asc
+
+export GNUPGHOME="$(mktemp -d)"
+for server in $(shuf -e ha.pool.sks-keyservers.net \
+                            hkp://p80.pool.sks-keyservers.net:80 \
+                            keyserver.ubuntu.com \
+                            hkp://keyserver.ubuntu.com:80 \
+                            pool.sks-keyservers.net) ; do \
+        gpg --keyserver "$server" --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 && break || : ; \
+done
+
+gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu
+rm -rf "$GNUPGHOME" /usr/local/bin/gosu.asc
+chmod +x /usr/local/bin/gosu
+# verify that the binary works
+gosu nobody true
+apt-get purge -y --auto-remove $fetchDeps
+rm -rf /var/lib/apt/lists/*
+
+mkdir -p /usr/unifi /usr/local/unifi/init.d /usr/unifi/init.d
+
+cp functions /usr/unifi/functions
+cp import_cert /usr/unifi/init.d/
+chmod +x /usr/unifi/init.d/import_cert
+
+
+mkdir -p /usr/share/man/man1/
+groupadd -r unifi -g $UNIFI_GID
+useradd --no-log-init -r -u $UNIFI_UID -g $UNIFI_GID unifi
+/usr/local/bin/docker-build.sh "${PKGURL}"
